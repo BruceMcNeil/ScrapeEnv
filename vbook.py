@@ -1,18 +1,19 @@
-#import requests
-from requests_html import AsyncHTMLSession
+import requests
+from requests_html import HTMLSession
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 import html
 import re
 import jsonpickle
 import json
+import time
 
 class VBook(object):
     def __init__(self, 
                  url:str = 'https://gutenberg.org/cache/epub/29494/pg29494-images.html',
                  start_phrase:str = '*** START OF THE PROJECT GUTENBERG EBOOK',
                  end_phrase:str = 'END OF THE PROJECT GUTENBERG',
-                 debug:bool = False) -> bool:
+                 debug:bool = False):
         self.debug = debug
         self.URL = url
         self.bookURL = url
@@ -29,9 +30,8 @@ class VBook(object):
         self.pageRe = re.compile("page[ivxld0-9].*")
         self.numberRe = re.compile("\[([ivxld0-9].*)\]") 
         self.pageNumbers = None
-        return True
     
-    def processHtmlSource(self):
+    def processHtmlSource(self) -> bool:
         result = False
         try:
             self.phase = '[parse url]'
@@ -52,17 +52,19 @@ class VBook(object):
             self.getSignificantText()
             self.step = '[build timeline]'
             self.buildTimeline()
+            self.step = '[output products]'
+            self.outputProducts()
             result = True
         except:
             raise Exception(
                 f'VBook initialization failed in phase {self.phase} step {self.step} {self.errorMessage}'
                 )
-        return result
+        return (result)
 
-    async def getContent(self) -> str:
-        asession = AsyncHTMLSession()
-        r = await asession.get(self.URL)
-        return r
+    def getContent(self) -> str:
+        asession = HTMLSession()
+        r = asession.get(self.URL)
+        return r.content
 
     def parseURL(self, url) -> str:
         urlParts = urlparse(url)
@@ -86,17 +88,18 @@ class VBook(object):
             print (f"rootURL: {rootURL}")
         return rootURL
     
-    def metaPrint(self, obj, attrib, name) -> str:
+    def metaPrint(self, obj, attrib, name, isURL:bool = False) -> str:
         nugget = obj[attrib]
         if (self.debug):
             print(f"---> '{name}' is: '{nugget}")
         unes = html.unescape(nugget)
         unes = unes.replace('\n', ' -- ')
-        unes = unes.replace('\\',' ')
-        unes = unes.replace('/',' ')
-        unes = unes.replace(':',' -- ')
-        unes = unes.replace('*',' ')
-        unes = unes.replace('?',' ')
+        if (isURL == False):
+            unes = unes.replace('\\',' ')
+            unes = unes.replace('/',' ')
+            unes = unes.replace(':',' -- ')
+            unes = unes.replace('?',' ')
+        unes = unes.replace('*',' ')        
         unes = unes.replace('"',' ')
         unes = unes.replace("'",'')
         unes = unes.replace('<',' ')
@@ -128,9 +131,9 @@ class VBook(object):
             try:
                 meta_property = meta['property']
                 if (meta_property == 'og:url'):
-                    self.bookURL = self.metaPrint(meta, 'content', 'URL')            
+                    self.bookURL = self.metaPrint(meta, 'content', 'URL', True)            
                 if (meta_property == 'og:image'):
-                    self.bookImage = self.metaPrint(meta, 'content', 'Image')            
+                    self.bookImage = self.metaPrint(meta, 'content', 'Image', True)            
             except:
                 pass
 
@@ -196,7 +199,7 @@ class VBook(object):
             end_index = self.texts.index(self.end_tag)
             self.texts = self.texts[:end_index]
             start_index = self.texts.index(self.start_tag)
-            start_index = start_index + self.start_tag.__len__
+            start_index = start_index + len(self.start_tag)
             self.texts = self.texts[start_index:]     
             result = True       
         except:
@@ -206,20 +209,24 @@ class VBook(object):
     def traverse(self, rootTags, newIndent):
         if (self.debug):
             print (f'Traverse at {repr(self.timeline)}')
-        for element in rootTags:
-            element_type = repr(type(element))
-            if (element_type != "<class 'bs4.element.Tag'>"):
-                # these are bs4.element.NavigableString
-                # print (f'Level {newIndent}> {repr(self.timeline)} [{type(element)}] : {element.string}')
-                self.timeline.checkStartSequence(element.string)
-            else:
-                if (self.timeline.setTimeLine(element.sourceline, element.sourcepos) == True):
-                    if (len(element.contents) != 0):
-                        self.traverse(element.contents, newIndent + 1)   
+        try:
+            for element in rootTags:
+                element_type = repr(type(element))
+                if (element_type != "<class 'bs4.element.Tag'>"):
+                    # these are bs4.element.NavigableString
+                    # print (f'Level {newIndent}> {repr(self.timeline)} [{type(element)}] : {element.string}')
+                    self.timeline.checkStartSequence(element.string)
                 else:
-                    if (self.debug):
-                        print ('TERMINATING DUE TO END OF TIMELINE')
-                    break
+                    if (self.timeline.setTimeLine(element.sourceline, element.sourcepos) == True):
+                        if (len(element.contents) != 0):
+                            self.traverse(element.contents, newIndent + 1)   
+                    else:
+                        if (self.debug):
+                            print ('TERMINATING DUE TO END OF TIMELINE')
+                        break
+        except Exception as exception:
+            print(f'In traverse(): {exception.args} {exception} {vars(exception)}')
+
 
     def scanToCollector(self, rootTags):
         for element in rootTags:
@@ -249,7 +256,8 @@ class VBook(object):
             self.scanToCollector(self.tags)
             self.content = self.textCollector.getContent()              
             result = True
-        except:
+        except Exception as e:
+            print(f'Exception in buildTimeLine: {e} {e.args} {vars(e)}')
             raise Exception("VBook unable to build timeline")
         return result
     
@@ -308,7 +316,7 @@ class AllImages(object):
         return rc
 
 class Timeline(object):
-    def __init__(self, startSequence = "*** START OF THE PROJECT GUTENBERG", endSequence = "*** END OF THE PROJECT GUTENBERG"):
+    def __init__(self, startSequence = "*** START OF THE PROJECT GUTENBERG", endSequence = "*** END OF THE PROJECT GUTENBERG", debug:bool = False):
         self.timeline_line = 0
         self.timeline_pos = 0
         self.contentStartTime = "[-1:-1]"
@@ -318,15 +326,18 @@ class Timeline(object):
         self.contentEndLine = -1
         self.contentEndPos = -1
         self.startSequence = startSequence
-        self.endSequence = endSequence   
+        self.endSequence = endSequence
+        self.debug = debug  
 
     def setTimeLine(self, new_line, new_pos):
         noViolation = True
         if (new_line < self.timeline_line):
-            print (f'LINE TIMELINE VIOLATION!!! new [{new_line}:{new_pos}] old [{self.timeline_line}:{self.timeline_pos}]')
+            if (self.debug):
+                print (f'LINE TIMELINE VIOLATION!!! new [{new_line}:{new_pos}] old [{self.timeline_line}:{self.timeline_pos}]')
             noViolation = False
         if (new_line == self.timeline_line and new_pos < self.timeline_pos):
-            print (f'POS TIMELINE VIOLATION!!! new [{new_line}:{new_pos}] old [{self.timeline_line}:{self.timeline_pos}]')
+            if (self.debug):
+                print (f'POS TIMELINE VIOLATION!!! new [{new_line}:{new_pos}] old [{self.timeline_line}:{self.timeline_pos}]')
             noViolation = False  
         if (noViolation == True):        
             self.timeline_line = new_line
@@ -407,7 +418,7 @@ class TTSCollector(object):
             with open(fname, 'w', encoding="utf-8") as f:
                 for tc in self.content:
                     f.write(tc.text)
-                    print(tc.line)
+                    # print(tc.line)
             rc = True
         except:
             print('Error in TTSCollector.dumpTextToFile')
@@ -431,12 +442,33 @@ class TTSCollector(object):
     sample usage of class VBook
 """
 if __name__ == "__main__":
-    htmlBookPath = 'https://gutenberg.org/cache/epub/29494/pg29494-images.html'
+    # todo use args to pass the input file name or single URL, also TEXT only flag or auto check th
+
+    with open('HTMLBookURLsToScan.txt', 'r') as f:
+        htmlBookPaths = f.readlines()
+        totalStart = time.perf_counter()
+        bookCounter = 0
+        for htmlBook in htmlBookPaths:
+            startTime = time.perf_counter()            
+            htmlBookPath = htmlBook.replace('\n','')
+            vbook = None
+            if (len(htmlBookPath) > 0):
+                bookCounter = bookCounter + 1
+                vbook = VBook(htmlBookPath)
+                vbook.processHtmlSource() 
+            endTime = time.perf_counter()
+            ms = endTime - startTime
+            print(f"Processed in {ms:.02f} s : {htmlBookPath}")
+        totalEnd = time.perf_counter()
+        dt = totalEnd - totalStart
+        print(f"In {dt:.02f} s collected {bookCounter} vbooks")        
+
+    #  htmlBookPath = 'https://gutenberg.org/cache/epub/29494/pg29494-images.html'
     # 'https://gutenberg.org/cache/epub/67699/pg67699-images.html'
     # 'https://gutenberg.org/cache/epub/54653/pg54653-images.html'
     # 'https://gutenberg.org/cache/epub/29494/pg29494-images.html'
-    vbook = VBook(htmlBookPath)
-    vbook.processHtmlSource() 
+    #  vbook = VBook(htmlBookPath)
+    #  vbook.processHtmlSource() 
     # work products are in current directory
 """
     Incorporate this code -- at end should be nothing below this line
