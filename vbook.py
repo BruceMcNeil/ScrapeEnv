@@ -7,19 +7,22 @@ import re
 import jsonpickle
 import json
 import time
+import vbookDb
 
 class VBook(object):
     def __init__(self, 
                  url:str = 'https://gutenberg.org/cache/epub/29494/pg29494-images.html',
                  start_phrase:str = '*** START OF THE PROJECT GUTENBERG EBOOK',
                  end_phrase:str = 'END OF THE PROJECT GUTENBERG',
+                 mongoClient:object = None,
                  debug:bool = False):
         self.debug = debug
         self.URL = url
         self.bookURL = url
         self.end_tag = end_phrase
         self.start_tag = start_phrase
-        self.debug = debug       
+        self.debug = debug
+        self.dbClient = mongoClient     
         self.errorMessage = ''
         self.bookTitle = "book-not-found"
         self.bookAuthor = "author-not-found"
@@ -75,7 +78,7 @@ class VBook(object):
         rootPart = "/"
         if (self.debug):
             print (f"Elements: {components}")
-        components.pop() # remove last element
+        components.pop() # remove last element111
         if (self.debug):
             print (f"Elements: {components}")
         components.pop(0) # remove the inexplicable blank element at start of list
@@ -269,18 +272,16 @@ class VBook(object):
         textFileName = f'INCOMING/{self.bookTitle}.{self.bookAuthor}.txt'
         rc = self.textCollector.dumpTextToFile(textFileName)
         result &= rc
-        if (self.debug):
-            print(f'dumpTextToFile: {rc}')
-        result &= rc
+        rc = self.textCollector.dumpTextToDB(self.dbClient, 'text')
         contentFileName = f'CONTENT/{self.bookTitle}.{self.bookAuthor}.content.txt'
         rc = self.textCollector.dumpContentToFile(contentFileName)
         result &= rc
-        if (self.debug):
-            print(f'dumpContentToFile: {rc}')
+        rc = self.textCollector.dumpContentToDB(self.dbClient, 'content')
+        result &= rc
         imagesFileName = f'CONTENT/{self.bookTitle}.{self.bookAuthor}.images.txt'
         rc = self.allImages.dumpImagesToFile(imagesFileName)
-        if (self.debug):
-            print(f'dumpImagesToFile: {rc}')
+        result &= rc
+        rc = self.allImages.dumpImagesToDB(self.dbClient, 'images')
         return (result)
     
     def endOfVBook(self):
@@ -304,7 +305,7 @@ class AllImages(object):
             imageContent = ImageContent(image)
             self.images.append(imageContent)
 
-    def dumpImagesToFile(self, fileName):
+    def dumpImagesToFile(self, fileName) -> bool:
         rc = False
         try:
             jsonObject = jsonpickle.encode(self)
@@ -314,6 +315,9 @@ class AllImages(object):
         except:
             pass
         return rc
+    
+    def dumpImagesToDB(self, client, collectionName) -> bool:
+        return True
 
 class Timeline(object):
     def __init__(self, startSequence = "*** START OF THE PROJECT GUTENBERG", endSequence = "*** END OF THE PROJECT GUTENBERG", debug:bool = False):
@@ -372,20 +376,29 @@ class Timeline(object):
 class TTSContent(object):
     def __init__(self, line, pos, text):
         unes = html.unescape(text)
+        """
         unes = unes.replace('\n', ' -- ')
         unes = unes.replace('\\',' ')
         unes = unes.replace('/',' ')
         unes = unes.replace(':',' -- ')
         unes = unes.replace('*',' ')
         unes = unes.replace('?',' ')
+        """
         unes = unes.replace('"',' ')
         unes = unes.replace("'",'')
+        """
         unes = unes.replace('<',' ')
         unes = unes.replace('>',' ')
-        unes = unes.replace('|',' ')        
+        unes = unes.replace('|',' ')
+        """
         self.line = line
         self.pos = pos
         self.text = unes
+
+        self.vbookText = vbookDb.VBookText()       
+        self.vbookText.line = line
+        self.vbookText.pos = pos
+        self.vbookText.text = unes
 
         
     def __str__(self):
@@ -400,10 +413,10 @@ class TTSCollector(object):
         self.content = []
 
     def __str__(self):
-         print(f'TTSCollector: {len(list(self.content))} content lines')
+        print(f'TTSCollector: {len(list(self.content))} content lines')
     
     def __repr__(self):
-         print(f'TTSCollector: {len(list(self.content))} content lines')
+        print(f'TTSCollector: {len(list(self.content))} content lines')
 
     def getContent(self):
         return self.content
@@ -412,7 +425,7 @@ class TTSCollector(object):
         tc = TTSContent(line, pos, text)
         self.content.append(tc)
 
-    def dumpTextToFile(self, fname):
+    def dumpTextToFile(self, fname) -> bool:
         rc = False
         try:
             with open(fname, 'w', encoding="utf-8") as f:
@@ -424,7 +437,10 @@ class TTSCollector(object):
             print('Error in TTSCollector.dumpTextToFile')
         return rc
     
-    def dumpContentToFile(self, fname):
+    def dumpTextToDB(self, client, collectionName):
+        pass
+        
+    def dumpContentToFile(self, fname) -> bool:
         rc = False
         try:
             with open(fname, 'w', encoding="utf-8") as f:
@@ -436,13 +452,23 @@ class TTSCollector(object):
             rc = True
         except:
             print('Error in TTSCollector.dumpContentToFile')
-        return rc    
+        return rc 
+
+    def dumpContentToDB(self, client, collectionName) -> bool:
+        return True
 
 """
     sample usage of class VBook
 """
 if __name__ == "__main__":
     # todo use args to pass the input file name or single URL, also TEXT only flag or auto check th
+    import pymongo
+    myClient = pymongo.MongoClient('mongodb://localhost:27017')
+    myDB = myClient["VBooks"]
+    dbList = myClient.list_database_names()
+    imagesCollection = myDB['images']
+    contentCollection = myDB['content']
+    textCollection = myDB['text']
 
     with open('HTMLBookURLsToScan.txt', 'r') as f:
         htmlBookPaths = f.readlines()
@@ -451,10 +477,11 @@ if __name__ == "__main__":
         for htmlBook in htmlBookPaths:
             startTime = time.perf_counter()            
             htmlBookPath = htmlBook.replace('\n','')
+            print(f'TODO: remove DB entries for this book')
             vbook = None
             if (len(htmlBookPath) > 0):
                 bookCounter = bookCounter + 1
-                vbook = VBook(htmlBookPath)
+                vbook = VBook(htmlBookPath, mongoClient=myClient)
                 vbook.processHtmlSource() 
             endTime = time.perf_counter()
             ms = endTime - startTime
