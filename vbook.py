@@ -8,13 +8,15 @@ import jsonpickle
 import json
 import time
 import vbookDb
+import textract
+import tiktoken
+
 
 class VBook(object):
     def __init__(self, 
                  url:str = 'https://gutenberg.org/cache/epub/29494/pg29494-images.html',
                  start_phrase:str = '*** START OF THE PROJECT GUTENBERG EBOOK',
                  end_phrase:str = 'END OF THE PROJECT GUTENBERG',
-                 mongoClient:object = None,
                  debug:bool = False):
         self.debug = debug
         self.URL = url
@@ -22,7 +24,6 @@ class VBook(object):
         self.end_tag = end_phrase
         self.start_tag = start_phrase
         self.debug = debug
-        self.dbClient = mongoClient     
         self.errorMessage = ''
         self.bookTitle = "book-not-found"
         self.bookAuthor = "author-not-found"
@@ -127,10 +128,10 @@ class VBook(object):
                 elif (meta_name == 'og.title'):
                     self.bookOgTitle = self.metaPrint(meta, 'content', 'OgTitle')            
                 elif (meta_name == 'og.subject'):
-                    self.bookOgSubject = self.metaPrint(meta, 'content', 'Subject')            
+                    self.bookOgSubject = self.metaPrint(meta, 'content', 'Subject') 
             except:
-                pass
-
+                if (self.debug):
+                    print(f"processMetaData. No name for meta tag: {meta}")
             try:
                 meta_property = meta['property']
                 if (meta_property == 'og:url'):
@@ -208,6 +209,9 @@ class VBook(object):
         except:
             raise ('Failed in getSignificantText')
         return result
+    
+    def getHTML(self) -> str:
+        return self.bookHTML
 
     def traverse(self, rootTags, newIndent):
         if (self.debug):
@@ -270,19 +274,26 @@ class VBook(object):
             for ttsContent in self.content:
                 print(f'[{ttsContent.line}:{ttsContent.pos}] {ttsContent.text}')
         textFileName = f'INCOMING/{self.bookTitle}.{self.bookAuthor}.txt'
-        rc = self.textCollector.dumpTextToFile(textFileName)
+        rc = self.textCollector.dumpContentToFile(textFileName)
         result &= rc
-        rc = self.textCollector.dumpTextToDB(self.dbClient, 'text')
-        contentFileName = f'CONTENT/{self.bookTitle}.{self.bookAuthor}.content.txt'
-        rc = self.textCollector.dumpContentToFile(contentFileName)
+        # rc = self.textCollector.dumpTextToDB(self.dbClient, 'text')
+        contentFileName = f'CONTENT/{self.bookTitle}.{self.bookAuthor}.json.content.txt'
+        rc = self.textCollector.dumpContentJsonToFile(contentFileName)
         result &= rc
-        rc = self.textCollector.dumpContentToDB(self.dbClient, 'content')
+        #rc = self.textCollector.dumpContentToDB(self.dbClient, 'content')
         result &= rc
-        imagesFileName = f'CONTENT/{self.bookTitle}.{self.bookAuthor}.images.txt'
-        rc = self.allImages.dumpImagesToFile(imagesFileName)
+        imagesFileName = f'CONTENT/{self.bookTitle}.{self.bookAuthor}.json.images.txt'
+        rc = self.allImages.dumpImagesJsonToFile(imagesFileName)
         result &= rc
-        rc = self.allImages.dumpImagesToDB(self.dbClient, 'images')
+        #rc = self.allImages.dumpImagesToDB(self.dbClient, 'images')
+        htmlFileName = f'INCOMING/{self.bookTitle}.{self.bookAuthor}.html'
+        rc = self.textCollector.dumpToFile(htmlFileName, self.bookHTML)
+        self.htmlFileName = htmlFileName
+        result &= rc
         return (result)
+    
+    def getText(self) -> str:
+        return self.textCollector.extractTextFromHTML(self.htmlFileName)
     
     def endOfVBook(self):
         pass
@@ -305,7 +316,7 @@ class AllImages(object):
             imageContent = ImageContent(image)
             self.images.append(imageContent)
 
-    def dumpImagesToFile(self, fileName) -> bool:
+    def dumpImagesJsonToFile(self, fileName) -> bool:
         rc = False
         try:
             jsonObject = jsonpickle.encode(self)
@@ -411,7 +422,7 @@ class TTSContent(object):
 class TTSCollector(object):
     def __init__(self):
         self.content = []
-
+ 
     def __str__(self):
         print(f'TTSCollector: {len(list(self.content))} content lines')
     
@@ -425,7 +436,7 @@ class TTSCollector(object):
         tc = TTSContent(line, pos, text)
         self.content.append(tc)
 
-    def dumpTextToFile(self, fname) -> bool:
+    def dumpContentToFile(self, fname) -> bool:
         rc = False
         try:
             with open(fname, 'w', encoding="utf-8") as f:
@@ -434,13 +445,35 @@ class TTSCollector(object):
                     # print(tc.line)
             rc = True
         except:
-            print('Error in TTSCollector.dumpTextToFile')
+            print('Error in TTSCollector.dumpContentToFile')
         return rc
+    
+    def dumpToFile(self, fname, content:str) -> bool:
+        rc = False
+        try:
+            with open(fname, 'w', encoding="utf-8") as f:
+                f.write(str(content, 'UTF-8'))
+            rc = True
+        except Exception as e:
+            print(f'Error in TTSCollector.dumpDumpToFile. {e.args}\n{e.__traceback__}\n {e.__annotations__}')
+        return rc 
+
+    def extractTextFromHTML(self, fname) -> str:
+        result = ""
+        try:
+            with open(fname, 'r') as f:
+                rawHTML = f.read()
+                soup = BeautifulSoup(rawHTML, "html.parser")
+                decodedString = soup.prettify(formatter=None)
+                result = decodedString
+        except Exception as e:
+            print(f'Error in extractTextFromHTML {e.__annotations__}')
+        return result  
     
     def dumpTextToDB(self, client, collectionName):
         pass
         
-    def dumpContentToFile(self, fname) -> bool:
+    def dumpContentJsonToFile(self, fname) -> bool:
         rc = False
         try:
             with open(fname, 'w', encoding="utf-8") as f:
@@ -462,13 +495,8 @@ class TTSCollector(object):
 """
 if __name__ == "__main__":
     # todo use args to pass the input file name or single URL, also TEXT only flag or auto check th
-    import pymongo
-    myClient = pymongo.MongoClient('mongodb://localhost:27017')
-    myDB = myClient["VBooks"]
-    dbList = myClient.list_database_names()
-    imagesCollection = myDB['images']
-    contentCollection = myDB['content']
-    textCollection = myDB['text']
+
+  
 
     with open('HTMLBookURLsToScan.txt', 'r') as f:
         htmlBookPaths = f.readlines()
@@ -481,8 +509,10 @@ if __name__ == "__main__":
             vbook = None
             if (len(htmlBookPath) > 0):
                 bookCounter = bookCounter + 1
-                vbook = VBook(htmlBookPath, mongoClient=myClient)
-                vbook.processHtmlSource() 
+                vbook = VBook(htmlBookPath)
+                vbook.processHtmlSource()
+                plainText = vbook.getText()
+                print(f'textTract htmlText: {plainText}')
             endTime = time.perf_counter()
             ms = endTime - startTime
             print(f"Processed in {ms:.02f} s : {htmlBookPath}")
