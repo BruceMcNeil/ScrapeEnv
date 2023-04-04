@@ -10,6 +10,8 @@ import time
 import vbookDb
 import textract
 import tiktoken
+import nltk
+from nltk.tokenize import word_tokenize, sent_tokenize
 
 
 class VBook(object):
@@ -397,6 +399,7 @@ class TTSContent(object):
         """
         unes = unes.replace('"',' ')
         unes = unes.replace("'",'')
+        unes = unes.replace("—", ' — ')
         """
         unes = unes.replace('<',' ')
         unes = unes.replace('>',' ')
@@ -405,6 +408,10 @@ class TTSContent(object):
         self.line = line
         self.pos = pos
         self.text = unes
+        self.tokenizedText = word_tokenize(self.text)
+        self.sentenceText = sent_tokenize(self.text)
+        self.posTaggedText = nltk.pos_tag(self.tokenizedText)
+        print(f'[{self.line}:{self.pos} -> {self.posTaggedText}]')
 
         self.vbookText = vbookDb.VBookText()       
         self.vbookText.line = line
@@ -435,6 +442,10 @@ class TTSCollector(object):
     def addContent(self, line, pos, text):
         tc = TTSContent(line, pos, text)
         self.content.append(tc)
+
+    def tagText(self, text:str):
+        self.taggedText = word_tokenize(self.content)
+
 
     def dumpContentToFile(self, fname) -> bool:
         rc = False
@@ -495,9 +506,6 @@ class TTSCollector(object):
 """
 if __name__ == "__main__":
     # todo use args to pass the input file name or single URL, also TEXT only flag or auto check th
-
-  
-
     with open('HTMLBookURLsToScan.txt', 'r') as f:
         htmlBookPaths = f.readlines()
         totalStart = time.perf_counter()
