@@ -12,7 +12,11 @@ import textract
 import tiktoken
 import nltk
 from nltk.tokenize import word_tokenize, sent_tokenize
-
+from g2p_en import G2p
+from nltk.corpus import cmudict
+import unicodedata
+from builtins import str as unicode
+import expand
 
 class VBook(object):
     def __init__(self, 
@@ -504,7 +508,87 @@ class TTSCollector(object):
 """
     sample usage of class VBook
 """
+"""
+CMU entries are particularly useful for speech recognition and synthesis, as it has mappings from words to their pronunciations in the ARPAbet phoneme set, a standard for English pronunciation. The current phoneme set contains 39 phonemes, vowels carry a lexical stress marker:
+0    — No stress
+1    — Primary stress
+2    — Secondary stress
+"""
+def accreteArpabet(arpabetPronunciationList:list):
+    pronunciationString = ""
+    pronunciationList = arpabetPronunciationList
+    try:
+        while (True):
+            p = pronunciationList.pop(0)
+            if (p == None or p == '' or p == ' '):
+                break
+            pronunciationString += f'{p} '
+    except:
+        pass
+    return pronunciationString, pronunciationList
+
 if __name__ == "__main__":
+
+    texts = ["I have $250 in my pocket.", # number -> spell-out
+             "popular pets, e.g. cats and dogs", # e.g. -> for example
+             "I refuse to collect the refuse around here.", # homograph
+             "I'm an activationist."] # newly coined word
+    g2p = G2p()
+    cmu = cmudict.dict()    
+    for text in texts:
+        text = unicode(text)
+        text = expand.normalize_numbers(text)
+        text = ''.join(char for char in unicodedata.normalize('NFD', text)
+                       if unicodedata.category(char) != 'Mn')  # Strip accents
+        text = re.sub("[^ a-zA-Z'.,?!\-]", "", text)
+        text = text.replace("i.e.", "that is")
+        text = text.replace("e.g.", "for example")
+        originalText = word_tokenize(text)
+        print(f'originalText: {originalText}')
+        text = text.lower()                        
+        tokenizedText = word_tokenize(text)  
+        print(f'tokenizedText: {tokenizedText}')
+        sentenceText = sent_tokenize(text)
+        print(f'sentenceText: {sentenceText}')
+        posTaggedText = nltk.pos_tag(tokenizedText)
+        print(f'posTaggedText: {posTaggedText}')
+
+        # tokenization
+        tokens = nltk.pos_tag(tokenizedText)  # tuples of (word, tag)
+        print(f'tokens: {tokens}')
+        prons = []
+        for word, pos in tokens:
+            if re.search("[a-z]", word) is None:
+                pron = [word]
+            elif word in cmu:  # lookup CMU dict
+                pron = cmu[word][0]
+            prons.extend(pron)
+            prons.extend([" "])
+        print(f'prons[]: {prons}')
+        g2pPronunciation = g2p(text)
+        print(f'g2p: {g2pPronunciation}')
+
+        reformedText = []
+        for word in originalText:
+            newToken = (word, '')
+            print(f'word: {word}')
+            # glue the split ticks like I'm from two tokens to one
+            if ("'" in word):
+                try:
+                    oldToken = reformedText.pop()
+                    newToken = (oldToken[0] + word, oldToken[1])
+                    # the tuple pronunciation already includes this word
+                except:
+                    newToken = (word, 'AH1 R EH0 R ')
+            else:          
+                # get the darpabet pronunciation for word
+                pronString, g2pPronunciation = accreteArpabet(g2pPronunciation)
+                newToken = (newToken[0], newToken[1] + pronString)
+            reformedText.append(newToken)
+        print(f'reformedText: {reformedText}')
+        # tokenize originatText with Arpabet pronunciation
+        # add IPA pronunciation
+
     # todo use args to pass the input file name or single URL, also TEXT only flag or auto check th
     with open('HTMLBookURLsToScan.txt', 'r') as f:
         htmlBookPaths = f.readlines()
