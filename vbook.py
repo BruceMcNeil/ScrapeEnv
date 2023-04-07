@@ -17,6 +17,10 @@ from nltk.corpus import cmudict
 import unicodedata
 from builtins import str as unicode
 import expand
+import os
+import codecs
+from arpabetandipaconvertor.arpabet2phoneticalphabet import ARPAbet2PhoneticAlphabetConvertor
+from arpabetandipaconvertor.excepts import PhonemeError
 
 class VBook(object):
     def __init__(self, 
@@ -527,67 +531,69 @@ def accreteArpabet(arpabetPronunciationList:list):
         pass
     return pronunciationString, pronunciationList
 
-if __name__ == "__main__":
+class TextToSAML(object):
+    def __init__(self):
+        self.homograph2features = self.construct_homograph_dictionary('./')
+        self.a2p = ARPAbet2PhoneticAlphabetConvertor()
+    def construct_homograph_dictionary(self, dirname):
+        homograph2features = []
+        try:
+            f = os.path.join(dirname,'homographs.en')
+            homograph2features = dict()
+            for line in codecs.open(f, 'r', 'utf8').read().splitlines():
+                if line.startswith("#"): continue # comment
+                headword, pron1, pron2, pos1 = line.strip().split("|")
+                homograph2features[headword.lower()] = (pron1.split(), pron2.split(), pos1)
+        except:
+            print(f'Could not find homograph definition file {dirname}')
+        return homograph2features
 
-    texts = ["I have $250 in my pocket.", # number -> spell-out
-             "popular pets, e.g. cats and dogs", # e.g. -> for example
-             "I refuse to collect the refuse around here.", # homograph
-             "I'm an activationist."] # newly coined word
-    g2p = G2p()
-    cmu = cmudict.dict()    
-    for text in texts:
-        text = unicode(text)
+    def convertToSAML(self, rawText:str) -> str:
+        processedText = ""
+        text = unicode(rawText)
         text = expand.normalize_numbers(text)
         text = ''.join(char for char in unicodedata.normalize('NFD', text)
                        if unicodedata.category(char) != 'Mn')  # Strip accents
         text = re.sub("[^ a-zA-Z'.,?!\-]", "", text)
         text = text.replace("i.e.", "that is")
-        text = text.replace("e.g.", "for example")
-        originalText = word_tokenize(text)
-        print(f'originalText: {originalText}')
-        text = text.lower()                        
-        tokenizedText = word_tokenize(text)  
-        print(f'tokenizedText: {tokenizedText}')
-        sentenceText = sent_tokenize(text)
-        print(f'sentenceText: {sentenceText}')
-        posTaggedText = nltk.pos_tag(tokenizedText)
-        print(f'posTaggedText: {posTaggedText}')
+        text = text.replace("e.g.", "for example")        
+        words = word_tokenize(text)
+        tokens = nltk.pos_tag(words)  # tuples of (word, tag)
 
-        # tokenization
-        tokens = nltk.pos_tag(tokenizedText)  # tuples of (word, tag)
-        print(f'tokens: {tokens}')
-        prons = []
         for word, pos in tokens:
-            if re.search("[a-z]", word) is None:
-                pron = [word]
-            elif word in cmu:  # lookup CMU dict
-                pron = cmu[word][0]
-            prons.extend(pron)
-            prons.extend([" "])
-        print(f'prons[]: {prons}')
-        g2pPronunciation = g2p(text)
-        print(f'g2p: {g2pPronunciation}')
+            pron = ""                   
+            if word.lower() in self.homograph2features:  # Check homograph
+                pron1, pron2, pos1 = self.homograph2features[word]
+                if pos.startswith(pos1):
+                    pron = pron1
+                else:
+                    pron = pron2
+            if (len(pron) > 0):
+                ipaString = self.a2p.convert_to_international_phonetic_alphabet(' '.join(pron))
+                processedText += f'<speak><phoneme alphabet="ipa" ph="{ipaString}"> {word} </phoneme></speak> '
+            else:
+                processedText += f"{word} "
+            #
+            # add inflection, pause, cardinals speech tags here
+            #
+        return processedText
 
-        reformedText = []
-        for word in originalText:
-            newToken = (word, '')
-            print(f'word: {word}')
-            # glue the split ticks like I'm from two tokens to one
-            if ("'" in word):
-                try:
-                    oldToken = reformedText.pop()
-                    newToken = (oldToken[0] + word, oldToken[1])
-                    # the tuple pronunciation already includes this word
-                except:
-                    newToken = (word, 'AH1 R EH0 R ')
-            else:          
-                # get the darpabet pronunciation for word
-                pronString, g2pPronunciation = accreteArpabet(g2pPronunciation)
-                newToken = (newToken[0], newToken[1] + pronString)
-            reformedText.append(newToken)
-        print(f'reformedText: {reformedText}')
-        # tokenize originatText with Arpabet pronunciation
-        # add IPA pronunciation
+"""
+
+    main program
+
+"""
+if __name__ == "__main__":
+    # test for book speaking with homophone disambiguation
+    textToSAML = TextToSAML()
+    texts = ["I have $250 in my pocket.", # number -> spell-out
+             "popular pets, e.g. cats and dogs", # e.g. -> for example
+             "I refuse to collect the refuse around here.", # homograph
+             "I'm an activationist."] # newly coined word
+    for text in texts:
+        ttsText = textToSAML.convertToSAML(text)
+        print(f'Phonetic conversion: {ttsText}')
+
 
     # todo use args to pass the input file name or single URL, also TEXT only flag or auto check th
     with open('HTMLBookURLsToScan.txt', 'r') as f:
@@ -603,8 +609,8 @@ if __name__ == "__main__":
                 bookCounter = bookCounter + 1
                 vbook = VBook(htmlBookPath)
                 vbook.processHtmlSource()
-                plainText = vbook.getText()
-                print(f'textTract htmlText: {plainText}')
+                #plainText = vbook.getText()
+                # print(f'textTract htmlText: {plainText}')
             endTime = time.perf_counter()
             ms = endTime - startTime
             print(f"Processed in {ms:.02f} s : {htmlBookPath}")
