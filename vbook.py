@@ -1,4 +1,6 @@
 import requests
+import os
+from KaizaTTS import Speaker
 from requests_html import HTMLSession
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -27,7 +29,8 @@ class VBook(object):
                  url:str = 'https://gutenberg.org/cache/epub/29494/pg29494-images.html',
                  start_phrase:str = '*** START OF THE PROJECT GUTENBERG EBOOK',
                  end_phrase:str = 'END OF THE PROJECT GUTENBERG',
-                 debug:bool = False):
+                 debug:bool = False,
+                 rootDirectory:str = 'D:\\'):
         self.debug = debug
         self.URL = url
         self.bookURL = url
@@ -44,6 +47,8 @@ class VBook(object):
         self.pageRe = re.compile("page[ivxld0-9].*")
         self.numberRe = re.compile("\[([ivxld0-9].*)\]") 
         self.pageNumbers = None
+        self.lastTxtFile = ""
+        self.rootDirectory = rootDirectory
     
     def processHtmlSource(self) -> bool:
         result = False
@@ -67,13 +72,16 @@ class VBook(object):
             self.step = '[build timeline]'
             self.buildTimeline()
             self.step = '[output products]'
-            self.outputProducts()
+            result, self.lastTextFile = self.outputProducts()
             result = True
         except:
             raise Exception(
                 f'VBook initialization failed in phase {self.phase} step {self.step} {self.errorMessage}'
                 )
         return (result)
+    
+    def getLastTxtFileName(self):
+        return self.lastTextFile
 
     def getContent(self) -> str:
         asession = HTMLSession()
@@ -130,15 +138,15 @@ class VBook(object):
             try:
                 meta_name = meta['name']
                 if (meta_name == 'dc.subject'):
-                    self.bookSubject = self.metaPrint(meta, 'content', 'Subject')
+                    self.bookSubject = self.metaPrint(meta, 'content', 'Subject').strip()
                 elif (meta_name == 'dc.creator'):
-                    self.bookAuthor = self.metaPrint(meta, 'content', 'Creator')
+                    self.bookAuthor = self.metaPrint(meta, 'content', 'Creator').strip()
                 elif (meta_name == 'dc.title'):
-                    self.bookTitle = self.metaPrint(meta, 'content', 'Title')
+                    self.bookTitle = self.metaPrint(meta, 'content', 'Title').strip()
                 elif (meta_name == 'og.title'):
-                    self.bookOgTitle = self.metaPrint(meta, 'content', 'OgTitle')            
+                    self.bookOgTitle = self.metaPrint(meta, 'content', 'OgTitle').strip()            
                 elif (meta_name == 'og.subject'):
-                    self.bookOgSubject = self.metaPrint(meta, 'content', 'Subject') 
+                    self.bookOgSubject = self.metaPrint(meta, 'content', 'Subject')
             except:
                 if (self.debug):
                     print(f"processMetaData. No name for meta tag: {meta}")
@@ -242,7 +250,7 @@ class VBook(object):
                             print ('TERMINATING DUE TO END OF TIMELINE')
                         break
         except Exception as exception:
-            print(f'In traverse(): {exception.args} {exception} {vars(exception)}')
+            print(f'Error In traverse(): {exception.args} {exception} {vars(exception)}')
 
 
     def scanToCollector(self, rootTags):
@@ -280,27 +288,31 @@ class VBook(object):
     
     def outputProducts(self) -> bool:
         result = True
+        MAXSTRINGLEN = 120
         if (self.debug):
             for ttsContent in self.content:
                 print(f'[{ttsContent.line}:{ttsContent.pos}] {ttsContent.text}')
-        textFileName = f'INCOMING/{self.bookTitle}.{self.bookAuthor}.txt'
+        # limit length of file name
+        if (len(self.bookTitle) > MAXSTRINGLEN):
+            self.bookTitle = self.bookTitle[0:MAXSTRINGLEN]
+        textFileName = f'{self.rootDirectory}INCOMING/{self.bookTitle}.{self.bookAuthor}.txt'
         rc = self.textCollector.dumpContentToFile(textFileName)
         result &= rc
         # rc = self.textCollector.dumpTextToDB(self.dbClient, 'text')
-        contentFileName = f'CONTENT/{self.bookTitle}.{self.bookAuthor}.json.content.txt'
+        contentFileName = f'{self.rootDirectory}CONTENT/{self.bookTitle}.{self.bookAuthor}.json.content.txt'
         rc = self.textCollector.dumpContentJsonToFile(contentFileName)
         result &= rc
         #rc = self.textCollector.dumpContentToDB(self.dbClient, 'content')
         result &= rc
-        imagesFileName = f'CONTENT/{self.bookTitle}.{self.bookAuthor}.json.images.txt'
+        imagesFileName = f'{self.rootDirectory}CONTENT/{self.bookTitle}.{self.bookAuthor}.json.images.txt'
         rc = self.allImages.dumpImagesJsonToFile(imagesFileName)
         result &= rc
         #rc = self.allImages.dumpImagesToDB(self.dbClient, 'images')
-        htmlFileName = f'INCOMING/{self.bookTitle}.{self.bookAuthor}.html'
+        htmlFileName = f'{self.rootDirectory}INCOMING/{self.bookTitle}.{self.bookAuthor}.html'
         rc = self.textCollector.dumpToFile(htmlFileName, self.bookHTML)
         self.htmlFileName = htmlFileName
         result &= rc
-        return (result)
+        return (result, textFileName)
     
     def getText(self) -> str:
         return self.textCollector.extractTextFromHTML(self.htmlFileName)
@@ -419,7 +431,7 @@ class TTSContent(object):
         self.tokenizedText = word_tokenize(self.text)
         self.sentenceText = sent_tokenize(self.text)
         self.posTaggedText = nltk.pos_tag(self.tokenizedText)
-        print(f'[{self.line}:{self.pos} -> {self.posTaggedText}]')
+        # print(f'[{self.line}:{self.pos} -> {self.posTaggedText}]')
 
         self.vbookText = vbookDb.VBookText()       
         self.vbookText.line = line
@@ -474,7 +486,7 @@ class TTSCollector(object):
                 f.write(str(content, 'UTF-8'))
             rc = True
         except Exception as e:
-            print(f'Error in TTSCollector.dumpDumpToFile. {e.args}\n{e.__traceback__}\n {e.__annotations__}')
+            print(f'Error in TTSCollector.dumpDumpToFile. {e.args}\n')
         return rc 
 
     def extractTextFromHTML(self, fname) -> str:
@@ -584,6 +596,7 @@ class TextToSAML(object):
 
 """
 if __name__ == "__main__":
+    """
     # test for book speaking with homophone disambiguation
     textToSAML = TextToSAML()
     texts = ["I have $250 in my pocket.", # number -> spell-out
@@ -593,6 +606,7 @@ if __name__ == "__main__":
     for text in texts:
         ttsText = textToSAML.convertToSAML(text)
         print(f'Phonetic conversion: {ttsText}')
+    """
 
 
     # todo use args to pass the input file name or single URL, also TEXT only flag or auto check th
@@ -600,23 +614,35 @@ if __name__ == "__main__":
         htmlBookPaths = f.readlines()
         totalStart = time.perf_counter()
         bookCounter = 0
+        count = 0
         for htmlBook in htmlBookPaths:
-            startTime = time.perf_counter()            
-            htmlBookPath = htmlBook.replace('\n','')
-            print(f'TODO: remove DB entries for this book')
-            vbook = None
-            if (len(htmlBookPath) > 0):
-                bookCounter = bookCounter + 1
-                vbook = VBook(htmlBookPath)
-                vbook.processHtmlSource()
-                #plainText = vbook.getText()
-                # print(f'textTract htmlText: {plainText}')
-            endTime = time.perf_counter()
-            ms = endTime - startTime
-            print(f"Processed in {ms:.02f} s : {htmlBookPath}")
-        totalEnd = time.perf_counter()
-        dt = totalEnd - totalStart
-        print(f"In {dt:.02f} s collected {bookCounter} vbooks")        
+            try:
+                startTime = time.perf_counter()            
+                htmlBookPath = htmlBook.replace('\n','')
+                print(f'TODO: remove DB entries for this book')
+                vbook = None
+                if (len(htmlBookPath) > 0):
+                    bookCounter = bookCounter + 1
+                    vbook = VBook(htmlBookPath)
+                    vbook.processHtmlSource()
+                    #plainText = vbook.getText()
+                    # print(f'textTract htmlText: {plainText}')
+                endTime = time.perf_counter()
+                ms = endTime - startTime
+                print(f"Processed inputs in {ms:.02f} s : {htmlBookPath}")
+                txtFileName = vbook.getLastTxtFileName()
+                if txtFileName.endswith(".txt"):
+                    count = count + 1
+                    print (f"Processing {txtFileName}")
+                    s = Speaker(txtFileName)
+                    s.processTxtToSpeech()
+                    s = False
+                    print (f"Process complete: {txtFileName}")
+                totalEnd = time.perf_counter()
+                dt = totalEnd - totalStart
+                print(f"In {dt:.02f} s collected {bookCounter} vbooks")
+            except:
+                print(f'Whoops got an exception on boek {htmlBook}')       
 
     #  htmlBookPath = 'https://gutenberg.org/cache/epub/29494/pg29494-images.html'
     # 'https://gutenberg.org/cache/epub/67699/pg67699-images.html'
